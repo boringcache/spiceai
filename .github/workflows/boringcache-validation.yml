@@ -13,6 +13,13 @@ name: BoringCache validation
 # That changes the machine, not the command.
 
 on:
+  # A fork never indexes a workflow that is absent from its default branch, so
+  # the branch itself carries a push trigger to register it. The jobs below stay
+  # dispatch-only.
+  push:
+    branches:
+      - boringcache-validation
+
   workflow_dispatch:
     inputs:
       cache_provider:
@@ -40,6 +47,7 @@ env:
 jobs:
   publish:
     name: Build and publish
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     permissions:
