@@ -1,0 +1,149 @@
+name: BoringCache validation
+
+# Cache-only validation for spiceai/spiceai#12770, which reports that the shared
+# SMB/NAS-backed sccache gateway going down turns 87-104 minute builds into
+# failures.
+#
+# The workload is upstream's `make lint-rust`, whose final step is the workspace
+# clippy compile that the `Rust Lint` job runs. Job 1 builds and publishes. Job 2
+# runs the same command on a clean runner with restore-only access.
+#
+# Upstream runs this job on the self-hosted `spiceai-macos` pool, which a fork
+# cannot use, so this workflow runs it on a GitHub-hosted ubuntu-latest runner.
+# That changes the machine, not the command.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cache_provider:
+        description: Cache implementation under test
+        type: choice
+        options:
+          - none
+          - boringcache
+        default: none
+      source_ref:
+        description: Exact Spice.ai commit to build
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.cache_provider }}-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          os: 'linux'
+
+      - name: Install Protoc
+        uses: ./.github/actions/install-protoc
+
+      - name: Set up make
+        uses: ./.github/actions/setup-make
+
+      - name: Set up cc
+        uses: ./.github/actions/setup-cc
+
+      - name: Restore Cargo and compiler state
+        if: inputs.cache_provider == 'boringcache'
+        uses: boringcache/one@v1
+        with:
+          mode: cargo
+          trust-policy: restore
+          diagnostics: summary
+          fail-on-cache-error: true
+
+      - name: Run Rust lint
+        run: make lint-rust
+
+      - name: Publish Cargo and compiler state
+        if: always() && inputs.cache_provider == 'boringcache'
+        id: boringcache
+        uses: boringcache/one@v1
+        with:
+          mode: cargo
+          trust-policy: publish
+          diagnostics: summary
+          fail-on-cache-error: true
+
+      - name: Retain evidence
+        if: always() && inputs.cache_provider == 'boringcache'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spiceai-publish-${{ inputs.source_ref }}
+          path: ${{ steps.boringcache.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  restore:
+    name: Restore on a clean runner
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          os: 'linux'
+
+      - name: Install Protoc
+        uses: ./.github/actions/install-protoc
+
+      - name: Set up make
+        uses: ./.github/actions/setup-make
+
+      - name: Set up cc
+        uses: ./.github/actions/setup-cc
+
+      - name: Restore Cargo and compiler state
+        if: inputs.cache_provider == 'boringcache'
+        id: boringcache
+        uses: boringcache/one@v1
+        with:
+          mode: cargo
+          trust-policy: restore
+          diagnostics: summary
+          fail-on-cache-error: true
+
+      - name: Run Rust lint
+        run: make lint-rust
+
+      - name: Retain evidence
+        if: always() && inputs.cache_provider == 'boringcache'
+        uses: actions/upload-artifact@v4
+        with:
+          name: spiceai-restore-${{ inputs.source_ref }}
+          path: ${{ steps.boringcache.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30
