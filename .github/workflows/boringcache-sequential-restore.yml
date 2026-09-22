@@ -1,4 +1,4 @@
-name: BoringCache sequential restore — Spice.ai Rust lint
+name: BoringCache target-only restore — Spice.ai Rust lint
 
 on:
   push:
@@ -11,11 +11,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: boringcache-spiceai-sequential-restore
+  group: boringcache-spiceai-target-only-restore
   cancel-in-progress: false
 
 env:
-  BORINGCACHE_RESTORE_MAX_CONCURRENCY: 1
   CARGO_INCREMENTAL: 0
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: short
@@ -23,7 +22,7 @@ env:
 
 jobs:
   restore:
-    name: Sequential full-cargo restore (${{ matrix.case }})
+    name: Target-only restore (${{ matrix.case }})
     if: github.repository == 'boringcache/spiceai' && github.ref == 'refs/heads/boringcache-validation'
     runs-on: ubuntu-24.04
     timeout-minutes: 240
@@ -68,13 +67,13 @@ jobs:
         with:
           ref: boringcache-validation
           path: .boringcache-validation-plan
-          sparse-checkout: .github/boringcache-plans/lint-cargo/.boringcache.toml
+          sparse-checkout: .github/boringcache-plans/lint-cargo-target-only/.boringcache.toml
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Select the BoringCache plan
         run: |
-          cp .boringcache-validation-plan/.github/boringcache-plans/lint-cargo/.boringcache.toml .boringcache.toml
+          cp .boringcache-validation-plan/.github/boringcache-plans/lint-cargo-target-only/.boringcache.toml .boringcache.toml
           printf '%s\n' '/.boringcache.toml' '/.boringcache-validation-plan/' >> .git/info/exclude
 
       - name: Record build identity
@@ -86,7 +85,7 @@ jobs:
           sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
           uname -a | tee "$RUNNER_TEMP/validation/runner.txt"
 
-      - name: Configure sequential read-only BoringCache
+      - name: Configure target-only read-only BoringCache
         id: cache
         uses: boringcache/one@9ca311f9b247835b3cc87639321c79bac8018145 # v1.31.0
         with:
@@ -131,7 +130,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: spiceai-sequential-full-cargo-${{ matrix.case }}
+          name: spiceai-target-only-${{ matrix.case }}
           path: |
             ${{ runner.temp }}/validation
             ${{ steps.cache.outputs.evidence-path }}
