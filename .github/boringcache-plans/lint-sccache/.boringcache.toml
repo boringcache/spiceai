@@ -1,0 +1,10 @@
+workspace = "boringcache/spiceai"
+
+[proxy]
+metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-validation", "series=v131-20260922"]
+
+[adapters.sccache]
+tag = "spiceai-lint-v131-20260922-compiler"
+command = ["make", "lint-rust"]
+metadata-hints = ["tool=sccache", "lane=rust-lint-compiler-only"]
+fail-on-cache-error = true
