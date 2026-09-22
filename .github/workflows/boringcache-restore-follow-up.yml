@@ -1,6 +1,12 @@
 name: BoringCache restore follow-up — Spice.ai Rust lint
 
 on:
+  push:
+    branches:
+      - boringcache-validation
+    paths:
+      - .github/boringcache-plans/lint-cargo-lean/.boringcache.toml
+      - .github/workflows/boringcache-restore-follow-up.yml
   workflow_dispatch:
     inputs:
       seed_ref:
@@ -49,22 +55,22 @@ jobs:
             mode: cargo
             plan: lint-cargo-lean
             case: unchanged
-            source_ref: ${{ inputs.seed_ref }}
+            source_ref: ${{ inputs.seed_ref || '1f904912df04d371b3cea0b3b993bbe6b86cd5a8' }}
           - lane: cargo-without-git-db
             mode: cargo
             plan: lint-cargo-lean
             case: rolling
-            source_ref: ${{ inputs.test_ref }}
+            source_ref: ${{ inputs.test_ref || 'ad58a640783a9d0e43b708529d830462cacb4bbb' }}
           - lane: compiler-only
             mode: sccache
             plan: lint-sccache
             case: unchanged
-            source_ref: ${{ inputs.seed_ref }}
+            source_ref: ${{ inputs.seed_ref || '1f904912df04d371b3cea0b3b993bbe6b86cd5a8' }}
           - lane: compiler-only
             mode: sccache
             plan: lint-sccache
             case: rolling
-            source_ref: ${{ inputs.test_ref }}
+            source_ref: ${{ inputs.test_ref || 'ad58a640783a9d0e43b708529d830462cacb4bbb' }}
     steps:
       - name: Checkout ${{ matrix.case }} source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
