@@ -1,33 +1,33 @@
 workspace = "boringcache/spiceai"
 
 [proxy]
-metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-validation", "series=v131-20260922"]
+metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-validation", "series=v132-20260923"]
 
 [entries.cargo-registry-cache]
-tag = "spiceai-lint-v131-20260922-registry-cache"
+tag = "spiceai-lint-v132-20260923-registry-cache"
 
 [entries.cargo-registry-index]
-tag = "spiceai-lint-v131-20260922-registry-index"
+tag = "spiceai-lint-v132-20260923-registry-index"
 
 [entries.cargo-git-db]
-tag = "spiceai-lint-v131-20260922-git-db"
+tag = "spiceai-lint-v132-20260923-git-db"
 
 [entries.cargo-target]
 kind = "cargo-target"
-tag = "spiceai-lint-v131-20260922-target"
+tag = "spiceai-lint-v132-20260923-target"
 path = "target"
 
 [profiles.cargo]
 entries = ["cargo-registry-cache", "cargo-registry-index", "cargo-git-db", "cargo-target"]
 
 [adapters.cargo]
-tag = "spiceai-lint-v131-20260922-cargo"
+tag = "spiceai-lint-v132-20260923-cargo"
 profiles = ["cargo"]
 compiler-cache = "sccache"
 metadata-hints = ["tool=runtime", "lane=rust-lint-full-cargo"]
 fail-on-cache-error = true
 
 [adapters.sccache]
-tag = "spiceai-lint-v131-20260922-cargo-sccache"
+tag = "spiceai-lint-v132-20260923-cargo-sccache"
 metadata-hints = ["tool=sccache", "lane=rust-lint-full-cargo"]
 fail-on-cache-error = true

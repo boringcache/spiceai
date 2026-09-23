@@ -35,9 +35,9 @@ jobs:
       matrix:
         include:
           - case: unchanged
-            source_ref: 1f904912df04d371b3cea0b3b993bbe6b86cd5a8
+            source_ref: d608da10526adae5e85d9f90cf8b91660a1cdbd6
           - case: rolling
-            source_ref: ad58a640783a9d0e43b708529d830462cacb4bbb
+            source_ref: 636493775ddf292e8f54da067be8bc046ecbc9aa
     steps:
       - name: Checkout ${{ matrix.case }} source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +87,7 @@ jobs:
 
       - name: Configure target-only read-only BoringCache
         id: cache
-        uses: boringcache/one@9ca311f9b247835b3cc87639321c79bac8018145 # v1.31.0
+        uses: boringcache/one@476c7df90bc1e7c2c4066aa7eb31cc057ef7f8d1 # v1.32.0
         with:
           setup: none
           mode: cargo

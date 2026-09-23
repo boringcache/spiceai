@@ -1,24 +1,24 @@
 workspace = "boringcache/spiceai"
 
 [proxy]
-metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-target-only", "series=v131-20260922"]
+metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-target-only", "series=v132-20260923"]
 
 [entries.cargo-target]
 kind = "cargo-target"
-tag = "spiceai-lint-v131-20260922-target"
+tag = "spiceai-lint-v132-20260923-target"
 path = "target"
 
 [profiles.cargo]
 entries = ["cargo-target"]
 
 [adapters.cargo]
-tag = "spiceai-lint-v131-20260922-cargo-target-only"
+tag = "spiceai-lint-v132-20260923-cargo-target-only"
 profiles = ["cargo"]
 compiler-cache = "sccache"
 metadata-hints = ["tool=runtime", "lane=rust-lint-target-only"]
 fail-on-cache-error = true
 
 [adapters.sccache]
-tag = "spiceai-lint-v131-20260922-cargo-sccache"
+tag = "spiceai-lint-v132-20260923-cargo-sccache"
 metadata-hints = ["tool=sccache", "lane=rust-lint-target-only"]
 fail-on-cache-error = true
