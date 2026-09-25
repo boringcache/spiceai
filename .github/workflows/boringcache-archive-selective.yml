@@ -1,0 +1,251 @@
+name: BoringCache archive selective saves — Spice.ai Rust lint
+
+on:
+  push:
+    branches:
+      - boringcache-validation
+    paths:
+      - .github/boringcache-plans/lint-archive-selective/.boringcache.toml
+      - .github/workflows/boringcache-archive-selective.yml
+  workflow_dispatch:
+    inputs:
+      seed_ref:
+        description: Exact Spice.ai commit used to populate the cache
+        type: string
+        required: true
+        default: d608da10526adae5e85d9f90cf8b91660a1cdbd6
+      test_ref:
+        description: Exact later Spice.ai commit used for rolling-source restore
+        type: string
+        required: true
+        default: 636493775ddf292e8f54da067be8bc046ecbc9aa
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boringcache-spiceai-archive-selective
+  cancel-in-progress: false
+
+env:
+  BORINGCACHE_ARCHIVE_GRAPH_WRITES: "1"
+  BORINGCACHE_ARCHIVE_SELECTIVE_READS: "1"
+  BORINGCACHE_ARCHIVE_SELECTIVE_VERIFY: "0"
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: short
+  SCCACHE_IDLE_TIMEOUT: 0
+
+jobs:
+  publish:
+    name: BoringCache Spice.ai selective seed
+    if: github.repository == 'boringcache/spiceai' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout seed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.seed_ref || 'd608da10526adae5e85d9f90cf8b91660a1cdbd6' }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Install Protoc
+        uses: ./.github/actions/install-protoc
+
+      - name: Set up make
+        uses: ./.github/actions/setup-make
+
+      - name: Set up cc
+        uses: ./.github/actions/setup-cc
+
+      - name: Install sccache
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7 # v2.62.59
+        with:
+          tool: sccache@0.17.0
+
+      - name: Checkout the BoringCache plan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .boringcache-validation-plan
+          sparse-checkout: .github/boringcache-plans/lint-archive-selective/.boringcache.toml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Select the BoringCache plan
+        run: |
+          cp ".boringcache-validation-plan/.github/boringcache-plans/lint-archive-selective/.boringcache.toml" .boringcache.toml
+          printf '%s\n' '/.boringcache.toml' '/.boringcache-validation-plan/' >> .git/info/exclude
+
+      - name: Record build identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/validation"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/validation/source-commit.txt"
+          rustc -Vv | tee "$RUNNER_TEMP/validation/rustc.txt"
+          cargo -V | tee "$RUNNER_TEMP/validation/cargo.txt"
+          sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
+          uname -a | tee "$RUNNER_TEMP/validation/runner.txt"
+
+      - name: Configure BoringCache publishing
+        id: cache
+        uses: boringcache/one@f0fb9b2d926a32b10c543e92093ba00c5a291b79 # v1.33.0
+        with:
+          mode: cargo
+          trust-policy: publish
+          diagnostics: summary
+          fail-on-cache-error: true
+
+      - name: Run Rust lint
+        run: |
+          set -o pipefail
+          started_at=$(date +%s)
+          make lint-rust 2>&1 | tee "$RUNNER_TEMP/validation/build.log"
+          printf '%s\n' "$(( $(date +%s) - started_at ))" > "$RUNNER_TEMP/validation/build-seconds.txt"
+
+      - name: Record cache measurements
+        if: always()
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+          RESTORE_DURATION_SECONDS: ${{ steps.cache.outputs.restore-duration-seconds }}
+          RESTORE_TRANSFERRED_BYTES: ${{ steps.cache.outputs.restore-transferred-bytes }}
+        run: |
+          {
+            printf 'cache_hit=%s\n' "$CACHE_HIT"
+            printf 'restore_duration_seconds=%s\n' "$RESTORE_DURATION_SECONDS"
+            printf 'restore_transferred_bytes=%s\n' "$RESTORE_TRANSFERRED_BYTES"
+            for path in "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/index" "$HOME/.cargo/git/db" target; do
+              if [[ -e "$path" ]]; then
+                du -sb "$path"
+              else
+                printf 'missing\t%s\n' "$path"
+              fi
+            done
+          } | tee "$RUNNER_TEMP/validation/cache-measurements.txt"
+
+      - name: Record sccache statistics
+        if: always()
+        run: sccache --show-stats --stats-format=json | tee "$RUNNER_TEMP/validation/sccache.json"
+
+      - name: Retain validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spiceai-archive-selective-publish
+          path: |
+            ${{ runner.temp }}/validation
+            ${{ steps.cache.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  restore:
+    name: BoringCache Spice.ai selective commit
+    needs: publish
+    if: github.repository == 'boringcache/spiceai' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout rolling source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.test_ref || '636493775ddf292e8f54da067be8bc046ecbc9aa' }}
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
+
+      - name: Install Protoc
+        uses: ./.github/actions/install-protoc
+
+      - name: Set up make
+        uses: ./.github/actions/setup-make
+
+      - name: Set up cc
+        uses: ./.github/actions/setup-cc
+
+      - name: Install sccache
+        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7 # v2.62.59
+        with:
+          tool: sccache@0.17.0
+
+      - name: Checkout the BoringCache plan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .boringcache-validation-plan
+          sparse-checkout: .github/boringcache-plans/lint-archive-selective/.boringcache.toml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Select the BoringCache plan
+        run: |
+          cp ".boringcache-validation-plan/.github/boringcache-plans/lint-archive-selective/.boringcache.toml" .boringcache.toml
+          printf '%s\n' '/.boringcache.toml' '/.boringcache-validation-plan/' >> .git/info/exclude
+
+      - name: Record build identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/validation"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/validation/source-commit.txt"
+          rustc -Vv | tee "$RUNNER_TEMP/validation/rustc.txt"
+          cargo -V | tee "$RUNNER_TEMP/validation/cargo.txt"
+          sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
+          uname -a | tee "$RUNNER_TEMP/validation/runner.txt"
+
+      - name: Configure BoringCache publishing
+        id: cache
+        uses: boringcache/one@f0fb9b2d926a32b10c543e92093ba00c5a291b79 # v1.33.0
+        with:
+          mode: cargo
+          trust-policy: publish
+          diagnostics: summary
+          fail-on-cache-error: true
+
+      - name: Run Rust lint
+        run: |
+          set -o pipefail
+          started_at=$(date +%s)
+          make lint-rust 2>&1 | tee "$RUNNER_TEMP/validation/build.log"
+          printf '%s\n' "$(( $(date +%s) - started_at ))" > "$RUNNER_TEMP/validation/build-seconds.txt"
+
+      - name: Record cache measurements
+        if: always()
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+          RESTORE_DURATION_SECONDS: ${{ steps.cache.outputs.restore-duration-seconds }}
+          RESTORE_TRANSFERRED_BYTES: ${{ steps.cache.outputs.restore-transferred-bytes }}
+        run: |
+          {
+            printf 'cache_hit=%s\n' "$CACHE_HIT"
+            printf 'restore_duration_seconds=%s\n' "$RESTORE_DURATION_SECONDS"
+            printf 'restore_transferred_bytes=%s\n' "$RESTORE_TRANSFERRED_BYTES"
+            for path in "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/index" "$HOME/.cargo/git/db" target; do
+              if [[ -e "$path" ]]; then
+                du -sb "$path"
+              else
+                printf 'missing\t%s\n' "$path"
+              fi
+            done
+          } | tee "$RUNNER_TEMP/validation/cache-measurements.txt"
+
+      - name: Record sccache statistics
+        if: always()
+        run: sccache --show-stats --stats-format=json | tee "$RUNNER_TEMP/validation/sccache.json"
+
+      - name: Retain validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: spiceai-archive-selective-rolling
+          path: |
+            ${{ runner.temp }}/validation
+            ${{ steps.cache.outputs.evidence-path }}
+          if-no-files-found: error
+          retention-days: 30

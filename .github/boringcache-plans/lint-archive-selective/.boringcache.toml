@@ -1,0 +1,33 @@
+workspace = "boringcache/spiceai"
+
+[proxy]
+metadata-hints = ["project=spiceai", "issue=12770", "workflow=rust-lint-validation", "series=archive-selective"]
+
+[entries.cargo-registry-cache]
+tag = "spiceai-lint-archive-selective-registry-cache"
+
+[entries.cargo-registry-index]
+tag = "spiceai-lint-archive-selective-registry-index"
+
+[entries.cargo-git-db]
+tag = "spiceai-lint-archive-selective-git-db"
+
+[entries.cargo-target]
+kind = "cargo-target"
+tag = "spiceai-lint-archive-selective-target"
+path = "target"
+
+[profiles.cargo]
+entries = ["cargo-registry-cache", "cargo-registry-index", "cargo-git-db", "cargo-target"]
+
+[adapters.cargo]
+tag = "spiceai-lint-archive-selective-cargo"
+profiles = ["cargo"]
+compiler-cache = "sccache"
+metadata-hints = ["tool=runtime", "lane=rust-lint-archive-selective"]
+fail-on-cache-error = true
+
+[adapters.sccache]
+tag = "spiceai-lint-archive-selective-cargo-sccache"
+metadata-hints = ["tool=sccache", "lane=rust-lint-archive-selective"]
+fail-on-cache-error = true
