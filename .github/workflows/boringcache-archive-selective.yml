@@ -1,56 +1,114 @@
-name: BoringCache archive selective saves — Spice.ai Rust lint
+name: "Spice.ai archive rolling saves"
+run-name: ${{ format('Spice.ai archive {0} | three commits | CLI {1}', inputs.archive_format, inputs.cli_version || 'Action default') }}
 
 on:
-  push:
-    branches:
-      - boringcache-validation
-    paths:
-      - .github/boringcache-plans/lint-archive-selective/.boringcache.toml
-      - .github/workflows/boringcache-archive-selective.yml
   workflow_dispatch:
     inputs:
-      seed_ref:
-        description: Exact Spice.ai commit used to populate the cache
+      cli_version:
+        description: Optional exact immutable BoringCache CLI release tag.
         type: string
-        required: true
-        default: d608da10526adae5e85d9f90cf8b91660a1cdbd6
-      test_ref:
-        description: Exact later Spice.ai commit used for rolling-source restore
+        default: ""
+      archive_format:
+        description: Archive format for every seed and commit save.
+        type: choice
+        options: [v3, v2]
+        default: v3
+      head_sha:
+        description: Exact final source commit; its three first-parent predecessors form the chain.
         type: string
-        required: true
-        default: 636493775ddf292e8f54da067be8bc046ecbc9aa
+        default: "636493775ddf292e8f54da067be8bc046ecbc9aa"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: boringcache-spiceai-archive-selective
+  group: archive-rolling-${{ github.workflow }}-${{ inputs.archive_format }}
   cancel-in-progress: false
 
 env:
   BORINGCACHE_ARCHIVE_GRAPH_WRITES: "1"
-  BORINGCACHE_ARCHIVE_SELECTIVE_READS: "1"
+  BORINGCACHE_ARCHIVE_SELECTIVE_READS: ${{ inputs.archive_format == 'v3' && '1' || '0' }}
   BORINGCACHE_ARCHIVE_SELECTIVE_VERIFY: "0"
+  CACHE_SCOPE: rolling-${{ inputs.archive_format }}-r${{ github.run_id }}-a${{ github.run_attempt }}
   CARGO_INCREMENTAL: 0
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: short
   SCCACHE_IDLE_TIMEOUT: 0
 
 jobs:
-  publish:
-    name: BoringCache Spice.ai selective seed
+  source:
+    name: Resolve Spice.ai source chain
     if: github.repository == 'boringcache/spiceai' && github.ref == 'refs/heads/boringcache-validation'
+    runs-on: ubuntu-24.04
+    outputs:
+      repository: ${{ steps.pin.outputs.repository }}
+      seed_parent: ${{ steps.chain.outputs.seed_parent }}
+      seed: ${{ steps.chain.outputs.seed }}
+      commit1: ${{ steps.chain.outputs.commit1 }}
+      commit2: ${{ steps.chain.outputs.commit2 }}
+      commit3: ${{ steps.chain.outputs.commit3 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read the source pin
+        id: pin
+        env:
+          INPUT_HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$INPUT_HEAD_SHA"
+          echo "repository=$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "head_sha=$source_sha" >> "$GITHUB_OUTPUT"
+      - name: Checkout the source history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.head_sha }}
+          path: source-chain
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Resolve three first-parent commits
+        id: chain
+        working-directory: source-chain
+        run: |
+          set -euo pipefail
+          for item in seed_parent:4 seed:3 commit1:2 commit2:1 commit3:0; do
+            key="${item%:*}"
+            depth="${item#*:}"
+            sha="$(git rev-parse "HEAD~$depth")"
+            echo "$key=$sha" >> "$GITHUB_OUTPUT"
+            echo "$key: $sha" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  seed:
+    name: BoringCache Spice.ai seed
+    needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
       contents: read
       id-token: write
-    steps:
-      - name: Checkout seed source
+    env:
+      PHASE: seed
+      SOURCE_SHA: ${{ needs.source.outputs.seed }}
+      PARENT_SHA: ${{ needs.source.outputs.seed_parent }}
+    steps: &build_steps
+      - name: Checkout selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.seed_ref || 'd608da10526adae5e85d9f90cf8b91660a1cdbd6' }}
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 2
           persist-credentials: false
+
+      - name: Verify the adjacent source and empty target
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$PARENT_SHA"
+          test ! -e target
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Set up Rust
         uses: ./.github/actions/setup-rust
@@ -83,6 +141,21 @@ jobs:
           cp ".boringcache-validation-plan/.github/boringcache-plans/lint-archive-selective/.boringcache.toml" .boringcache.toml
           printf '%s\n' '/.boringcache.toml' '/.boringcache-validation-plan/' >> .git/info/exclude
 
+      - name: Scope this archive comparison
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import re
+          from pathlib import Path
+          scope = os.environ["CACHE_SCOPE"]
+          assert re.fullmatch(r"[a-z0-9-]+", scope)
+          for filename in ['.boringcache.toml']:
+              path = Path(filename)
+              text, count = re.subn(r'(?m)^(tag = ")([^"]+)(")$', lambda m: m[1] + m[2] + "-" + scope + m[3], path.read_text())
+              assert count > 0, filename
+              path.write_text(text)
+          PYTHON
+
       - name: Record build identity
         run: |
           mkdir -p "$RUNNER_TEMP/validation"
@@ -92,10 +165,28 @@ jobs:
           sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
           uname -a | tee "$RUNNER_TEMP/validation/runner.txt"
 
+      - name: Require clean source before caching
+        run: test -z "$(git -C . status --porcelain=v1 --untracked-files=all)"
+
+      - name: Require a published target before the commit build
+        if: env.PHASE != 'seed'
+        uses: boringcache/one@f0fb9b2d926a32b10c543e92093ba00c5a291b79 # v1.33.0
+        with:
+          cli-version: ${{ inputs.cli_version }}
+          setup: none
+          mode: cargo
+          lookup-only: true
+          fail-on-cache-miss: true
+          trust-policy: restore
+          diagnostics: summary
+          fail-on-cache-error: true
+
       - name: Configure BoringCache publishing
         id: cache
         uses: boringcache/one@f0fb9b2d926a32b10c543e92093ba00c5a291b79 # v1.33.0
         with:
+          cli-version: ${{ inputs.cli_version }}
+          setup: none
           mode: cargo
           trust-policy: publish
           diagnostics: summary
@@ -132,120 +223,58 @@ jobs:
         if: always()
         run: sccache --show-stats --stats-format=json | tee "$RUNNER_TEMP/validation/sccache.json"
 
+      - name: Verify source remained clean
+        run: test -z "$(git -C . status --porcelain=v1 --untracked-files=all)"
+
       - name: Retain validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: spiceai-archive-selective-publish
+          name: spiceai-archive-${{ inputs.archive_format }}-${{ env.PHASE }}
           path: |
             ${{ runner.temp }}/validation
             ${{ steps.cache.outputs.evidence-path }}
           if-no-files-found: error
           retention-days: 30
 
-  restore:
-    name: BoringCache Spice.ai selective commit
-    needs: publish
-    if: github.repository == 'boringcache/spiceai' && github.ref == 'refs/heads/boringcache-validation'
+  commit1:
+    name: BoringCache Spice.ai commit 1
+    needs: [source, seed]
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
       contents: read
       id-token: write
-    steps:
-      - name: Checkout rolling source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.test_ref || '636493775ddf292e8f54da067be8bc046ecbc9aa' }}
-          persist-credentials: false
+    env:
+      PHASE: commit1
+      SOURCE_SHA: ${{ needs.source.outputs.commit1 }}
+      PARENT_SHA: ${{ needs.source.outputs.seed }}
+    steps: *build_steps
 
-      - name: Set up Rust
-        uses: ./.github/actions/setup-rust
+  commit2:
+    name: BoringCache Spice.ai commit 2
+    needs: [source, commit1]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PHASE: commit2
+      SOURCE_SHA: ${{ needs.source.outputs.commit2 }}
+      PARENT_SHA: ${{ needs.source.outputs.commit1 }}
+    steps: *build_steps
 
-      - name: Install Protoc
-        uses: ./.github/actions/install-protoc
-
-      - name: Set up make
-        uses: ./.github/actions/setup-make
-
-      - name: Set up cc
-        uses: ./.github/actions/setup-cc
-
-      - name: Install sccache
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7 # v2.62.59
-        with:
-          tool: sccache@0.17.0
-
-      - name: Checkout the BoringCache plan
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: .boringcache-validation-plan
-          sparse-checkout: .github/boringcache-plans/lint-archive-selective/.boringcache.toml
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Select the BoringCache plan
-        run: |
-          cp ".boringcache-validation-plan/.github/boringcache-plans/lint-archive-selective/.boringcache.toml" .boringcache.toml
-          printf '%s\n' '/.boringcache.toml' '/.boringcache-validation-plan/' >> .git/info/exclude
-
-      - name: Record build identity
-        run: |
-          mkdir -p "$RUNNER_TEMP/validation"
-          git rev-parse HEAD | tee "$RUNNER_TEMP/validation/source-commit.txt"
-          rustc -Vv | tee "$RUNNER_TEMP/validation/rustc.txt"
-          cargo -V | tee "$RUNNER_TEMP/validation/cargo.txt"
-          sccache --version | tee "$RUNNER_TEMP/validation/sccache-version.txt"
-          uname -a | tee "$RUNNER_TEMP/validation/runner.txt"
-
-      - name: Configure BoringCache publishing
-        id: cache
-        uses: boringcache/one@f0fb9b2d926a32b10c543e92093ba00c5a291b79 # v1.33.0
-        with:
-          mode: cargo
-          trust-policy: publish
-          diagnostics: summary
-          fail-on-cache-error: true
-
-      - name: Run Rust lint
-        run: |
-          set -o pipefail
-          started_at=$(date +%s)
-          make lint-rust 2>&1 | tee "$RUNNER_TEMP/validation/build.log"
-          printf '%s\n' "$(( $(date +%s) - started_at ))" > "$RUNNER_TEMP/validation/build-seconds.txt"
-
-      - name: Record cache measurements
-        if: always()
-        env:
-          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
-          RESTORE_DURATION_SECONDS: ${{ steps.cache.outputs.restore-duration-seconds }}
-          RESTORE_TRANSFERRED_BYTES: ${{ steps.cache.outputs.restore-transferred-bytes }}
-        run: |
-          {
-            printf 'cache_hit=%s\n' "$CACHE_HIT"
-            printf 'restore_duration_seconds=%s\n' "$RESTORE_DURATION_SECONDS"
-            printf 'restore_transferred_bytes=%s\n' "$RESTORE_TRANSFERRED_BYTES"
-            for path in "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/index" "$HOME/.cargo/git/db" target; do
-              if [[ -e "$path" ]]; then
-                du -sb "$path"
-              else
-                printf 'missing\t%s\n' "$path"
-              fi
-            done
-          } | tee "$RUNNER_TEMP/validation/cache-measurements.txt"
-
-      - name: Record sccache statistics
-        if: always()
-        run: sccache --show-stats --stats-format=json | tee "$RUNNER_TEMP/validation/sccache.json"
-
-      - name: Retain validation evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: spiceai-archive-selective-rolling
-          path: |
-            ${{ runner.temp }}/validation
-            ${{ steps.cache.outputs.evidence-path }}
-          if-no-files-found: error
-          retention-days: 30
+  commit3:
+    name: BoringCache Spice.ai commit 3
+    needs: [source, commit2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PHASE: commit3
+      SOURCE_SHA: ${{ needs.source.outputs.commit3 }}
+      PARENT_SHA: ${{ needs.source.outputs.commit2 }}
+    steps: *build_steps
